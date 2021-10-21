@@ -54,7 +54,7 @@ fi
 
 backup_dir=${params[0]}
 
-if ! [ -d $backup_dir/ ]; then echo "ERR: Не найдена папка для резервных копий $backup_dir" | wlog; exit 1; fi
+if ! [[ -d $backup_dir/ ]]; then echo "ERR: Не найдена папка для резервных копий $backup_dir" | wlog; exit 1; fi
 
 data=$(date +%Y-%m-%d)
 if [[ -n $incl ]]; then gf1="grep -E -w -i $(echo $incl | tr -s ' ' '|')"; else gf1="cat"; fi
@@ -69,8 +69,8 @@ do
   mkdir -p $backup_dir/$activevm/$data 2>&1 | wlog
   if [[ ${PIPESTATUS[0]} -ne 0 ]]; then echo "ERR: Ошибка при создании папки $backup_dir/$activevm/$data" | wlog; exit 1; fi
 
-  grep "libvirt-$(virsh domuuid $activevm) (enforce)" /sys/kernel/security/apparmor/profiles
-  if [ $? -eq 0 ]
+  res=$(grep "libvirt-$(virsh domuuid $activevm) (enforce)" /sys/kernel/security/apparmor/profiles)
+  if [[ -n $res ]]
   then
     echo "Переводим VM в режим complain" | wlog
     enforce=true
@@ -118,7 +118,7 @@ do
     echo "ERR: Ошибка при создании снимка" | wlog
   fi
 
-  if [ $enforce ]
+  if [[ $enforce ]]
   then
     echo "Возвращаем VM в режим enforce" | wlog
     aa-enforce /etc/apparmor.d/libvirt/libvirt-$(virsh domuuid $activevm) 2>&1 | wlog
