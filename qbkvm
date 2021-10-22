@@ -69,19 +69,28 @@ do
   mkdir -p $backup_dir/$activevm/$data 2>&1 | wlog
   if [[ ${PIPESTATUS[0]} -ne 0 ]]; then echo "ERR: Ошибка при создании папки $backup_dir/$activevm/$data" | wlog; exit 1; fi
 
-  res=$(grep "libvirt-$(virsh domuuid $activevm) (enforce)" /sys/kernel/security/apparmor/profiles)
-  if [[ -n $res ]]
-  then
-    echo "Переводим VM в режим complain" | wlog
-    enforce=true
-    aa-complain /etc/apparmor.d/libvirt/libvirt-$(virsh domuuid $activevm) 2>&1 | wlog
-  fi
-
   echo "Копируем конфигурацию в $backup_dir/$activevm/$data/$activevm.xml" | wlog
   virsh dumpxml $activevm > $backup_dir/$activevm/$data/$activevm.xml 2>&1 | wlog
 
+  if [[ $(virsh domblklist $activevm --details | grep disk | awk '{print $3}' | wc -l) > 1 ]]
+  then
+    res=$(grep "libvirt-$(virsh domuuid $activevm) (enforce)" /sys/kernel/security/apparmor/profiles)
+    if [[ -n $res ]]
+    then
+      echo "Переводим AppArmor для VM в режим complain" | wlog
+      enforce=true
+      aa-complain /etc/apparmor.d/libvirt/libvirt-$(virsh domuuid $activevm) 2>&1 | wlog
+    fi
+  fi
+
   disk_list=$(virsh domblklist $activevm --details | grep disk | awk '{print $3}')
   disk_path=$(virsh domblklist $activevm --details | grep disk | awk '{print $4}')
+  
+  if [[ -z $disk_list ]]
+  then
+    echo "ERR: Список дисков пуст" | wlog
+    continue
+  fi
 
   echo "Делаем снимки для дисков VM" | wlog
   virsh snapshot-create-as --domain $activevm snapshot --disk-only --atomic --quiesce --no-metadata 2>&1 | wlog
@@ -121,7 +130,7 @@ do
 
   if [[ $enforce ]]
   then
-    echo "Возвращаем VM в режим enforce" | wlog
+    echo "Возвращаем AppArmor для VM в режим enforce" | wlog
     aa-enforce /etc/apparmor.d/libvirt/libvirt-$(virsh domuuid $activevm) 2>&1 | wlog
   fi
 done
