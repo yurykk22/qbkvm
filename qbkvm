@@ -2,6 +2,7 @@
 
 opt_err=0
 opt_L=0
+opt_l=0
 cc=3
 incl=""
 excl=""
@@ -12,6 +13,7 @@ while [ -n "$1" ]
 do
   case "$1" in
     -L) opt_L=1;;
+    -l) opt_l=1;;
     -c) cc="$2"; re='^[0-9]+$'
         if ! [[ $cc =~ $re ]]; then echo "ERR: Неверно указано количество хранимых копий"; opt_err=1; fi
         shift;;
@@ -40,11 +42,12 @@ if [[ ${#params[*]} -ne 1 ]]; then echo "ERR: Неверно указаны па
 if [[ $opt_err -eq 1 ]] || [[ ${#params[*]} -ne 1 ]]
 then
   echo
-  echo "Резервное копирование запущенных KVM с дисками QCOW2"
+  echo "Резервное копирование KVM с дисками QCOW2"
   echo
   echo "Команда:"
-  echo "zbkvm [-L] [-c <countcopies>] [-i \"<vm1> [<vm2>...[<vmN>]]\"] [-e \"<vm1> [<vm2>...[<vmN>]]\"] <backupdir>"
+  echo "qbkvm [-L] [-l] [-c <countcopies>] [-i \"<vm1> [<vm2>...[<vmN>]]\"] [-e \"<vm1> [<vm2>...[<vmN>]]\"] <backupdir>"
   echo "-L Отключить логирование"
+  echo "-l Только запущенные виртуальные машины"
   echo "-c Количество хранимых копий"
   echo "-i Только виртуальные машины по списку"
   echo "-e Исключить виртуальные машины по списку"
@@ -57,9 +60,10 @@ backup_dir=${params[0]}
 if ! [[ -d $backup_dir/ ]]; then echo "ERR: Не найдена папка для резервных копий $backup_dir" | wlog; exit 1; fi
 
 data=$(date +%Y-%m-%d)
+if [[ $opt_l -eq 0 ]]; then live=" --all"; else live=""; fi
 if [[ -n $incl ]]; then gf1="grep -E -w -i $(echo $incl | tr -s ' ' '|')"; else gf1="cat"; fi
 if [[ -n $excl ]]; then gf2="grep -v -E -w -i $(echo $excl | tr -s ' ' '|')"; else gf2="cat"; fi
-vm=$(virsh list | grep . | awk '{print $2}' | sed 1,2d | $gf1 | $gf2)
+vm=$(virsh list$live | grep . | awk '{print $2}' | sed 1,2d | $gf1 | $gf2)
 
 for activevm in $vm
 do
@@ -72,7 +76,9 @@ do
   echo "Копируем конфигурацию в $backup_dir/$activevm/$data/$activevm.xml" | wlog
   virsh dumpxml $activevm > $backup_dir/$activevm/$data/$activevm.xml 2>&1 | wlog
 
-  if [[ $(virsh domblklist $activevm --details | grep disk | awk '{print $3}' | wc -l) > 1 ]]
+  live=$(virsh list | grep . | awk '{print $2}' | sed 1,2d | grep ^${activevm}$)
+
+  if [[ $(virsh domblklist $activevm --details | grep disk | awk '{print $3}' | wc -l) > 1 ]] && [[ $live ]]
   then
     res=$(grep "libvirt-$(virsh domuuid $activevm) (enforce)" /sys/kernel/security/apparmor/profiles)
     if [[ -n $res ]]
@@ -92,9 +98,15 @@ do
     continue
   fi
 
-  echo "Делаем снимки для дисков VM" | wlog
-  virsh snapshot-create-as --domain $activevm snapshot --disk-only --atomic --quiesce --no-metadata 2>&1 | wlog
-  if [[ ${PIPESTATUS[0]} -eq 0 ]]
+  err_snap=0
+  if [[ $live ]]
+  then
+    echo "Делаем снимки для дисков VM" | wlog
+    virsh snapshot-create-as --domain $activevm snapshot --disk-only --atomic --quiesce --no-metadata 2>&1 | wlog
+    if [[ ${PIPESTATUS[0]} -ne 0 ]]; then err_snap=1; fi
+  fi
+
+  if [[ $err_snap -eq 0 ]]
   then
     echo "Копируем диски" | wlog
     err_copy=0
@@ -105,19 +117,22 @@ do
       cp -rv $path $backup_dir/$activevm/$data/$filename 2>&1 | wlog
       if [[ ${PIPESTATUS[0]} -ne 0 ]]; then err_copy=1; fi
     done
-    for disk in $disk_list
-    do
-      snapshot=$(virsh domblklist $activevm | grep $disk | awk '{print $2}')
-      echo "Объединяем снимок $snapshot с диском $disk" | wlog
-      virsh blockcommit $activevm $disk --active --verbose --pivot 2>&1 | wlog
-      if [[ ${PIPESTATUS[0]} -eq 0 ]]
-      then
-        echo "Удаляем снимок $snapshot" | wlog
-        rm -rf $snapshot 2>&1 | wlog
-      else
-        echo "ERR: Ошибка при объединении снимка с диском" | wlog
-      fi
-    done
+    if [[ $live ]]
+    then
+      for disk in $disk_list
+      do
+        snapshot=$(virsh domblklist $activevm | grep $disk | awk '{print $2}')
+        echo "Объединяем снимок $snapshot с диском $disk" | wlog
+        virsh blockcommit $activevm $disk --active --verbose --pivot 2>&1 | wlog
+        if [[ ${PIPESTATUS[0]} -eq 0 ]]
+        then
+          echo "Удаляем снимок $snapshot" | wlog
+          rm -rf $snapshot 2>&1 | wlog
+        else
+          echo "ERR: Ошибка при объединении снимка с диском" | wlog
+        fi
+      done
+    fi
     if [[ $err_copy -eq 0 ]]
     then
       echo "Удаляем устаревшие копии" | wlog
