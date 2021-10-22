@@ -69,22 +69,23 @@ for activevm in $vm
 do
   echo "VM: $activevm" | wlog
 
-  echo "Создаем папку для сегодняшних копий" | wlog
+  echo "Создание папки для текущих копий \'$backup_dir/$activevm/$data\'" | wlog
   mkdir -p $backup_dir/$activevm/$data 2>&1 | wlog
-  if [[ ${PIPESTATUS[0]} -ne 0 ]]; then echo "ERR: Ошибка при создании папки $backup_dir/$activevm/$data" | wlog; exit 1; fi
+  if [[ ${PIPESTATUS[0]} -ne 0 ]]; then echo "ERR: Ошибка при создании папки \'$backup_dir/$activevm/$data\'" | wlog; exit 1; fi
 
-  echo "Копируем конфигурацию в $backup_dir/$activevm/$data/$activevm.xml" | wlog
+  echo "Копирование конфигурации \'$activevm\' в \'$backup_dir/$activevm/$data/$activevm.xml\'" | wlog
   virsh dumpxml $activevm > $backup_dir/$activevm/$data/$activevm.xml 2>&1 | wlog
 
   live=$(virsh list | grep . | awk '{print $2}' | sed 1,2d | grep ^${activevm}$)
 
+  unset enforce
   if [[ $(virsh domblklist $activevm --details | grep disk | awk '{print $3}' | wc -l) > 1 ]] && [[ $live ]]
   then
     res=$(grep "libvirt-$(virsh domuuid $activevm) (enforce)" /sys/kernel/security/apparmor/profiles)
     if [[ -n $res ]]
     then
-      echo "Переводим AppArmor для VM в режим complain" | wlog
-      enforce=true
+      echo "Назначение AppArmor для \'$activevm\' претензионного режима" | wlog
+      enforce=1
       aa-complain /etc/apparmor.d/libvirt/libvirt-$(virsh domuuid $activevm) 2>&1 | wlog
     fi
   fi
@@ -94,27 +95,27 @@ do
   
   if [[ -z $disk_list ]]
   then
-    echo "ERR: Список дисков пуст" | wlog
+    echo "ERR: Список дисков \'$activevm\' пуст" | wlog
     continue
   fi
 
   err_snap=0
   if [[ $live ]]
   then
-    echo "Делаем снимки для дисков VM" | wlog
+    echo "Создание снимков для дисков" | wlog
     virsh snapshot-create-as --domain $activevm snapshot --disk-only --atomic --quiesce --no-metadata 2>&1 | wlog
     if [[ ${PIPESTATUS[0]} -ne 0 ]]; then err_snap=1; fi
   fi
 
   if [[ $err_snap -eq 0 ]]
   then
-    echo "Копируем диски" | wlog
+    echo "Копирование дисков" | wlog
     err_copy=0
     for path in $disk_path
     do
       filename=$(basename $path)
-      echo "Копируем $path" | wlog
-      cp -rv $path $backup_dir/$activevm/$data/$filename 2>&1 | wlog
+      echo "\'$path\' -> \'$backup_dir/$activevm/$data/$filename\'" | wlog
+      cp -r $path $backup_dir/$activevm/$data/$filename 2>&1 | wlog
       if [[ ${PIPESTATUS[0]} -ne 0 ]]; then err_copy=1; fi
     done
     if [[ $live ]]
@@ -122,31 +123,31 @@ do
       for disk in $disk_list
       do
         snapshot=$(virsh domblklist $activevm | grep $disk | awk '{print $2}')
-        echo "Объединяем снимок $snapshot с диском $disk" | wlog
+        echo "Объединение снимка \'$snapshot\' с диском \'$disk\'" | wlog
         virsh blockcommit $activevm $disk --active --verbose --pivot 2>&1 | wlog
         if [[ ${PIPESTATUS[0]} -eq 0 ]]
         then
-          echo "Удаляем снимок $snapshot" | wlog
+          echo "Удаление снимка \'$snapshot\'" | wlog
           rm -rf $snapshot 2>&1 | wlog
         else
-          echo "ERR: Ошибка при объединении снимка с диском" | wlog
+          echo "ERR: Ошибка при объединении снимка \'$snapshot\' с диском \'$disk\'" | wlog
         fi
       done
     fi
     if [[ $err_copy -eq 0 ]]
     then
-      echo "Удаляем устаревшие копии" | wlog
+      echo "Удаление устаревших копий" | wlog
       find $backup_dir/$activevm/20[0-3][0-9]-[0-1][0-9]-[0-3][0-9] -type d -empty -delete 2>&1 | wlog
       ls -rd $backup_dir/$activevm/20[0-3][0-9]-[0-1][0-9]-[0-3][0-9] | tail -n +$(($cc+1)) | xargs -r rm -rv 2>&1 | wlog
     fi
   else
-    echo "ERR: Ошибка при создании снимка" | wlog
+    echo "ERR: Ошибка при создании снимков дисков для \'$activevm\'" | wlog
   fi
 
   if [[ $enforce ]]
   then
-    echo "Возвращаем AppArmor для VM в режим enforce" | wlog
+    echo "Возврат AppArmor для \'$activevm\' принудительного режима" | wlog
     aa-enforce /etc/apparmor.d/libvirt/libvirt-$(virsh domuuid $activevm) 2>&1 | wlog
   fi
 done
-echo "Завершено" | wlog
+echo "Резервное копирование завершено" | wlog
