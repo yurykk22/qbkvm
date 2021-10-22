@@ -83,37 +83,38 @@ do
   disk_list=$(virsh domblklist $activevm --details | grep disk | awk '{print $3}')
   disk_path=$(virsh domblklist $activevm --details | grep disk | awk '{print $4}')
 
-  echo "Делаем снимок для VM" | wlog
+  echo "Делаем снимки для дисков VM" | wlog
   virsh snapshot-create-as --domain $activevm snapshot --disk-only --atomic --quiesce --no-metadata 2>&1 | wlog
   if [[ ${PIPESTATUS[0]} -eq 0 ]]
   then
-    sleep 3
     echo "Копируем диски" | wlog
+    err_copy=0
     for path in $disk_path
     do
       filename=$(basename $path)
       echo "Копируем $path" | wlog
       cp -rv $path $backup_dir/$activevm/$data/$filename 2>&1 | wlog
-      if [[ ${PIPESTATUS[0]} -eq 0 ]]
-      then
-        find $backup_dir/$activevm/20[0-3][0-9]-[0-1][0-9]-[0-3][0-9] -type d -empty -delete 2>&1 | wlog
-        ls -rd $backup_dir/$activevm/20[0-3][0-9]-[0-1][0-9]-[0-3][0-9] | tail -n +$(($cc+1)) | xargs -r rm -rv 2>&1 | wlog
-      fi
-      sleep 3
+      if [[ ${PIPESTATUS[0]} -ne 0 ]]; then err_copy=1; fi
     done
     for disk in $disk_list
     do
       snapshot=$(virsh domblklist $activevm | grep $disk | awk '{print $2}')
-      echo "Объединяем снимок с диском" | wlog
+      echo "Объединяем снимок $snapshot с диском $disk" | wlog
       virsh blockcommit $activevm $disk --active --verbose --pivot 2>&1 | wlog
       if [[ ${PIPESTATUS[0]} -eq 0 ]]
       then
-        echo "Удаляем снимок" | wlog
+        echo "Удаляем снимок $snapshot" | wlog
         rm -rf $snapshot 2>&1 | wlog
       else
         echo "ERR: Ошибка при объединении снимка с диском" | wlog
       fi
     done
+    if [[ $err_copy -eq 0 ]]
+    then
+      echo "Удаляем устаревшие копии" | wlog
+      find $backup_dir/$activevm/20[0-3][0-9]-[0-1][0-9]-[0-3][0-9] -type d -empty -delete 2>&1 | wlog
+      ls -rd $backup_dir/$activevm/20[0-3][0-9]-[0-1][0-9]-[0-3][0-9] | tail -n +$(($cc+1)) | xargs -r rm -rv 2>&1 | wlog
+    fi
   else
     echo "ERR: Ошибка при создании снимка" | wlog
   fi
